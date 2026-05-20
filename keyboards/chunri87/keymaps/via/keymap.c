@@ -178,16 +178,24 @@ typedef union {
         uint8_t rgb_index: 4;
         uint8_t os_mode: 2;
         uint8_t hui_index: 3;
-        uint8_t rgb_brightness;
+        uint8_t logo_sat;       /* Logo 饱和度 0~255，VIA 可调 */
     };
 } confinfo_t;
 confinfo_t confinfo;
 
 #ifdef RGB_MATRIX_ENABLE
 
-/** Logo 侧灯处于“点亮”状态：未强制关闭且已选择颜色 */
+/** Logo 侧灯处于“点亮”状态：未强制关闭，且 rgblight 开启或已选预设色 */
 static bool chunri_logo_is_active(void) {
-    return !confinfo.layer && (confinfo.rgb_index != 0);
+    if (confinfo.layer) {
+        return false;
+    }
+#    ifdef RGBLIGHT_ENABLE
+    if (rgblight_is_enabled()) {
+        return true;
+    }
+#    endif
+    return confinfo.rgb_index != 0;
 }
 
 /** 主背光或 Logo 任一需要亮则保持灯驱与 rgb_matrix 任务运行 */
@@ -252,7 +260,7 @@ void eeconfig_confinfo_default(void) {
     confinfo.no_gui = false;
     confinfo.layer = false;
     confinfo.rgb_index = 0;
-    confinfo.rgb_brightness = RGB_MATRIX_DEFAULT_VAL;
+    confinfo.logo_sat = 255;
     confinfo.os_mode = WIN_BASE;
     eeconfig_update_user(confinfo.raw);
 }
@@ -295,6 +303,12 @@ bool im_init_user(void) {
         eeconfig_confinfo_default();
     }
     RL_Togg_flag = confinfo.layer;
+#    ifdef RGBLIGHT_ENABLE
+    if (!confinfo.layer && !rgblight_is_enabled()) {
+        rgblight_enable_noeeprom();
+        rgblight_mode_noeeprom(RGBLIGHT_DEFAULT_MODE);
+    }
+#    endif
     chunri_rgb_sync_hw();
     readbat = timer_read32();
 
@@ -524,11 +538,19 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
         for (uint8_t i = 0; i < 13; i++) {
             rgb_matrix_set_color(i + RGB_MATRIX_LOGO_LED, 0, 0, 0);
         }
-    } else if (confinfo.rgb_index != 0)
-    {   
-        for(uint8_t i = 0 ; i < 13 ; i++){
-            rgb_matrix_set_color(i+RGB_MATRIX_LOGO_LED,rgb_light[confinfo.rgb_index][0]*rgblight_get_val()/RGBLIGHT_LIMIT_VAL,rgb_light[confinfo.rgb_index][1]*rgblight_get_val()/RGBLIGHT_LIMIT_VAL, rgb_light[confinfo.rgb_index][2]*rgblight_get_val()/RGBLIGHT_LIMIT_VAL);       
-        }          
+#    ifdef RGBLIGHT_ENABLE
+    } else if (!rgblight_is_enabled() && (confinfo.rgb_index != 0)) {
+        /* Fn 层 RL_HUI 预设色（未用 VIA/rgblight 时） */
+        const uint8_t val = rgblight_get_val();
+        const uint8_t sat = rgblight_get_sat();
+        const uint8_t idx = confinfo.rgb_index;
+        for (uint8_t i = 0; i < 13; i++) {
+            uint8_t r = (uint16_t)rgb_light[idx][0] * val / RGBLIGHT_LIMIT_VAL * sat / 255;
+            uint8_t g = (uint16_t)rgb_light[idx][1] * val / RGBLIGHT_LIMIT_VAL * sat / 255;
+            uint8_t b = (uint16_t)rgb_light[idx][2] * val / RGBLIGHT_LIMIT_VAL * sat / 255;
+            rgb_matrix_set_color(i + RGB_MATRIX_LOGO_LED, r, g, b);
+        }
+#    endif
     }       
 
     // if(Fn_Key_Press_flag == 1)
@@ -585,7 +607,7 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
         for (uint8_t i = 0; i < RGB_MATRIX_LOGO_LED; i++) {
             rgb_matrix_set_color(i, 0, 0, 0);
         }
-        if (confinfo.layer || (confinfo.rgb_index == 0)) {
+        if (!chunri_logo_is_active()) {
             for (uint8_t i = 0; i < 13; i++) {
                 rgb_matrix_set_color(i + RGB_MATRIX_LOGO_LED, 0, 0, 0);
             }

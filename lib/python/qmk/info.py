@@ -67,8 +67,13 @@ def _validate(keyboard, info_data):
     community_layouts = info_data.get('community_layouts', [])
     community_layouts_names = list(map(lambda layout: f'LAYOUT_{layout}', community_layouts))
 
-    # Make sure we have at least one layout
-    if len(layouts) == 0 or all(not layout.get('json_layout', False) for layout in layouts.values()):
+    # Make sure we have at least one layout (from info.json and/or <keyboard>.h LAYOUT macro)
+    has_json_layout = any(layout.get('json_layout', False) for layout in layouts.values())
+    has_c_macro_layout = any(layout.get('c_macro', False) for layout in layouts.values())
+
+    if len(layouts) == 0:
+        _log_error(info_data, 'No LAYOUTs defined! Need at least one layout defined in info.json.')
+    elif not has_json_layout and not has_c_macro_layout:
         _log_error(info_data, 'No LAYOUTs defined! Need at least one layout defined in info.json.')
 
     # Warn if physical positions are offset (at least one key should be at x=0, and at least one key at y=0)

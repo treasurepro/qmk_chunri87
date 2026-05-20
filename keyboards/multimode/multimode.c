@@ -1781,12 +1781,22 @@ enum via_custom_defined_id {
     id_rgbrec_hs_buffer,
 };
 
+__attribute__((weak)) bool via_extra_custom_value_command(uint8_t *data, uint8_t length) {
+    (void)data;
+    (void)length;
+    return false;
+}
+
 void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
     // data = [ command_id, channel_id, value_id, value_data ]
     uint8_t *command_id = &(data[0]);
     uint8_t *channel_id = &(data[1]);
     uint8_t *value_id   = &(data[2]);
     uint8_t *value_data = &(data[3]);
+
+    if (via_extra_custom_value_command(data, length)) {
+        return;
+    }
 
     if (*channel_id != id_custom_channel) {
         // Return the unhandled state
