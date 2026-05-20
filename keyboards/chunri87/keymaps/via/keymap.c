@@ -172,10 +172,10 @@ typedef union {
     uint32_t raw;
     struct {
         uint8_t flag: 1;
-        uint8_t rgb_enable: 1;
+        uint8_t rgb_enable: 1;  /* 主背光（键面 RGB Matrix 效果）开关 */
         uint8_t no_gui: 1;
-        uint8_t layer: 1;
-		uint8_t rgb_index: 4;
+        uint8_t layer: 1;      /* 复用：Logo 灯强制关闭（RL_TOG），1=关 */
+        uint8_t rgb_index: 4;
         uint8_t os_mode: 2;
         uint8_t hui_index: 3;
         uint8_t rgb_brightness;
@@ -185,7 +185,47 @@ confinfo_t confinfo;
 
 #ifdef RGB_MATRIX_ENABLE
 
-// 此函数不需要改动
+/** Logo 侧灯处于“点亮”状态：未强制关闭且已选择颜色 */
+static bool chunri_logo_is_active(void) {
+    return !confinfo.layer && (confinfo.rgb_index != 0);
+}
+
+/** 主背光或 Logo 任一需要亮则保持灯驱与 rgb_matrix 任务运行 */
+static bool chunri_rgb_hw_needed(void) {
+    return confinfo.rgb_enable || chunri_logo_is_active();
+}
+
+static void chunri_rgb_sync_hw(void) {
+#    ifndef RGB_DRIVER_EN_STATE
+#        define RGB_DRIVER_EN_STATE 1
+#    endif
+#    ifdef RGB_DRIVER_EN_PIN
+    if (chunri_rgb_hw_needed()) {
+        writePin(RGB_DRIVER_EN_PIN, RGB_DRIVER_EN_STATE);
+#        ifdef RGB_DRIVER_EN2_PIN
+        writePin(RGB_DRIVER_EN2_PIN, RGB_DRIVER_EN_STATE);
+#        endif
+        if (!rgb_matrix_is_enabled()) {
+            rgb_matrix_enable_noeeprom();
+        }
+    } else {
+        rgb_matrix_disable_noeeprom();
+        writePin(RGB_DRIVER_EN_PIN, !RGB_DRIVER_EN_STATE);
+#        ifdef RGB_DRIVER_EN2_PIN
+        writePin(RGB_DRIVER_EN2_PIN, !RGB_DRIVER_EN_STATE);
+#        endif
+    }
+#    else
+    if (chunri_rgb_hw_needed()) {
+        if (!rgb_matrix_is_enabled()) {
+            rgb_matrix_enable_noeeprom();
+        }
+    } else {
+        rgb_matrix_disable_noeeprom();
+    }
+#    endif
+}
+
 bool mm_get_rgb_enable(void) {
 #    ifdef RGBLIGHT_ENABLE
     return confinfo.rgb_enable;
@@ -254,6 +294,8 @@ bool im_init_user(void) {
     if (!confinfo.raw) {
         eeconfig_confinfo_default();
     }
+    RL_Togg_flag = confinfo.layer;
+    chunri_rgb_sync_hw();
     readbat = timer_read32();
 
 #ifdef RGB_MATRIX_BLINK_INDEX_BAT
@@ -366,6 +408,18 @@ bool im_process_record_user(uint16_t keycode, keyrecord_t *record) {
         case OS_CLR:
             return false;
             break;
+        case RGB_TOG: {
+            /* 拦截 multimode 默认逻辑，避免关主背光时一并 rgb_matrix_disable */
+#    ifdef RGB_TRIGGER_ON_KEYDOWN
+            if (record->event.pressed) {
+#    else
+            if (!record->event.pressed) {
+#    endif
+                mm_set_rgb_enable(!mm_get_rgb_enable());
+                chunri_rgb_sync_hw();
+            }
+            return false;
+        } break;
         case RGB_HUI:{
             if (record->event.pressed) {
                 confinfo.hui_index = (confinfo.hui_index + 1) % RGB_HSV_MAX;
@@ -373,30 +427,37 @@ bool im_process_record_user(uint16_t keycode, keyrecord_t *record) {
                                 rgb_hsvs[confinfo.hui_index][1],
                                 rgb_matrix_get_val());
                 eeconfig_update_user(confinfo.raw);
+                chunri_rgb_sync_hw();
             }
             return false;
         } break;
         case RL_TOG: {
             if (record->event.pressed) {
-                RL_Togg_flag = !RL_Togg_flag;                   
+                confinfo.layer = !confinfo.layer;
+                RL_Togg_flag   = confinfo.layer;
+                eeconfig_update_user(confinfo.raw);
+                chunri_rgb_sync_hw();
             }
             return false;
         } break;
         case RL_HUI: {         
-            if ((record->event.pressed) &&(RL_Togg_flag == 0)) {
-                confinfo.rgb_index ++;    
-                if(confinfo.rgb_index >=9){
+            if ((record->event.pressed) && !confinfo.layer) {
+                confinfo.rgb_index++;
+                if (confinfo.rgb_index >= 9) {
                     confinfo.rgb_index = 1;
                 }
-                eeconfig_update_user(confinfo.raw);    
+                eeconfig_update_user(confinfo.raw);
+                chunri_rgb_sync_hw();
             }
             return false;
         } break;
         case RL_MOD: {
-             if ((record->event.pressed) &&(RL_Togg_flag == 0)) {
+             if ((record->event.pressed) && !confinfo.layer) {
                 rgblight_increase();
                 confinfo.rgb_index = 0;
-            }                
+                eeconfig_update_user(confinfo.raw);
+                chunri_rgb_sync_hw();
+            }
             return false;
         } break;
          
@@ -459,12 +520,11 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
     }
 
  
-    if(RL_Togg_flag){
-        for(uint8_t i = 0 ; i < 13 ; i++){
-            rgb_matrix_set_color(i+RGB_MATRIX_LOGO_LED,0,0,0);       
-        }            
-    }
-    else if(confinfo.rgb_index != 0)
+    if (confinfo.layer) {
+        for (uint8_t i = 0; i < 13; i++) {
+            rgb_matrix_set_color(i + RGB_MATRIX_LOGO_LED, 0, 0, 0);
+        }
+    } else if (confinfo.rgb_index != 0)
     {   
         for(uint8_t i = 0 ; i < 13 ; i++){
             rgb_matrix_set_color(i+RGB_MATRIX_LOGO_LED,rgb_light[confinfo.rgb_index][0]*rgblight_get_val()/RGBLIGHT_LIMIT_VAL,rgb_light[confinfo.rgb_index][1]*rgblight_get_val()/RGBLIGHT_LIMIT_VAL, rgb_light[confinfo.rgb_index][2]*rgblight_get_val()/RGBLIGHT_LIMIT_VAL);       
@@ -521,8 +581,15 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
     // }
 
 
-    if((bat_blink)&&(battery_chrg_flag)){  
-        rgb_matrix_set_color_all(0,0,0);  
+    if ((bat_blink) && (battery_chrg_flag)) {
+        for (uint8_t i = 0; i < RGB_MATRIX_LOGO_LED; i++) {
+            rgb_matrix_set_color(i, 0, 0, 0);
+        }
+        if (confinfo.layer || (confinfo.rgb_index == 0)) {
+            for (uint8_t i = 0; i < 13; i++) {
+                rgb_matrix_set_color(i + RGB_MATRIX_LOGO_LED, 0, 0, 0);
+            }
+        }
     }
       
       
